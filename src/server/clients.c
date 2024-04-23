@@ -19,6 +19,7 @@ void Add(pList list, pClient client) {
         list->tail = node;
     }
     list->head = node;
+    list->size++;
 }
 
 void Remove(pList list, pClient client) {
@@ -37,6 +38,7 @@ void Remove(pList list, pClient client) {
         node->prev->next = node->next;
         node->next->prev = node->prev;
     }
+    list->size--;
     F(DestroyNode)(node);
 }
 

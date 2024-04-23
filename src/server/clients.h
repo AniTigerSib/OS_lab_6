@@ -12,6 +12,7 @@ typedef struct ClientList* pList;
 typedef struct ClientList {
     pNodeClient head;
     pNodeClient tail;
+    int size;
 } ClientList;
 
 #define F(T) T##Client

@@ -1,7 +1,6 @@
 #pragma GCC diagnostic ignored "-Wunused-parameter"
 #include "server.h"
 
-#include <pthread.h>
 #include <semaphore.h>
 #include <stdatomic.h>
 #include <stdio.h>
@@ -23,21 +22,17 @@ sem_t g_messages_lock;
 
 sem_t g_clients_lock;
 
-atomic_int g_is_working;
-
 int main() {
     // Main part
 
-    int server_fd, new_socket;
-    struct sockaddr_in address;
+    Server server;
+    server.addrlen = sizeof(server.address);
     int opt = 1;
-    socklen_t addrlen = sizeof(address);
 
     // Threads part
 
-    g_is_working = 1;
-    pthread_t hThreadReciever;
     pthread_t hThreadSender;
+    pthread_t hThreadListner;
     // int hThreads[2];
 
     sem_init(&g_messages_to_send, 0, 0);
@@ -46,49 +41,57 @@ int main() {
 
     // Initializing of server
 
-    if ((server_fd = socket(AF_INET, SOCK_STREAM, 0)) == 0) {
+    if ((server.server_fd = socket(AF_INET, SOCK_STREAM, 0)) == 0) {
         perror("socket failed");
         return(EXIT_FAILURE);
     }
-    if (setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt))) {
+    if (setsockopt(server.server_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt))) {
         perror("setsockopt");
         return(EXIT_FAILURE);
     }
-    address.sin_family = AF_INET;
-    address.sin_addr.s_addr = INADDR_ANY;
-    address.sin_port = htons(PORT);
-    if (bind(server_fd, (struct sockaddr *)&address, sizeof(address)) < 0) {
+    server.address.sin_family = AF_INET;
+    server.address.sin_addr.s_addr = INADDR_ANY;
+    server.address.sin_port = htons(PORT);
+    if (bind(server.server_fd, (struct sockaddr *)&server.address, server.addrlen) < 0) {
         perror("bind failed");
         exit(EXIT_FAILURE);
     }
-    if (listen(server_fd, 3) < 0) {
+    if (listen(server.server_fd, 3) < 0) {
         perror("listen");
         exit(EXIT_FAILURE);
     }
-    if ((new_socket = accept(server_fd, (struct sockaddr *)&address, (socklen_t*)&addrlen)) < 0) {
-        perror("accept");
-        exit(EXIT_FAILURE);
-    }
-
-    pClient client = (pClient)malloc(sizeof(Client));
-    client->socket_fd = new_socket;
-    Add(&g_clients, client);
     
     // Initializing of threads
 
-    pthread_create(&hThreadReciever, NULL, MessageReciever, client);
+    pthread_create(&hThreadListner, NULL, Listner, &server);
     pthread_create(&hThreadSender, NULL, MessageSender, NULL);
 
     pthread_exit(0);
 
-    close(new_socket);
-    close(server_fd);
-    free(client);
+    close(server.server_fd);
     return 0;
 }
 
 void ClearBuffer(char* buffer) {
     memset(buffer, 0, BUFFER_SIZE);
+}
+
+void *Listner(void *arg) {
+    pServer server = (pServer)arg;
+    while (1) {
+        int new_socket;
+        if ((new_socket = accept(server->server_fd, (struct sockaddr *)&(server->address), (socklen_t*)&(server->addrlen))) < 0) {
+            perror("accept");
+            exit(EXIT_FAILURE);
+        }
+        fprintf(stdout, "Connected\n");
+        pClient client = (pClient)malloc(sizeof(Client));
+        client->socket_fd = new_socket;
+        Add(&g_clients, client);
+        client->p_reciever_thread = (pthread_t*)malloc(sizeof(pthread_t));
+        pthread_create(client->p_reciever_thread, NULL, MessageReciever, client);
+    }
+    return NULL;
 }
 
 void *MessageReciever(void *arg) {
@@ -98,9 +101,9 @@ void *MessageReciever(void *arg) {
     while (1) {
         valread = read(client->socket_fd, buffer, BUFFER_SIZE - 1);
         if (valread != 0) {
-            fprintf(stdout, "%s\n", buffer);
             if (strcmp(buffer, "close") == 0) {
-                fprintf(stdout, "Removed\n");
+                send(client->socket_fd, buffer, strlen(buffer), 0);
+                fprintf(stdout, "Disconnected\n");
                 Remove(&g_clients, client);
                 break;
             }
@@ -128,14 +131,6 @@ void *MessageSender(void *arg) {
         }
         if (sem_wait(&g_clients_lock)!= -1) {
             ForEverySend(&g_clients, buffer, Send);
-            if (strcmp(buffer, "close") == 0) {
-                if (sem_wait(&g_messages_lock) != -1) {
-                    Clear(&g_messages);
-                    sem_post(&g_messages_lock);
-                }
-                ForEveryClose(&g_clients);
-                break;
-            }
             sem_post(&g_clients_lock);
         }
         ClearBuffer(buffer);
